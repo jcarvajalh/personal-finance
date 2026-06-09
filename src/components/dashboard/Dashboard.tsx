@@ -7,12 +7,17 @@ import { supabase } from '../../lib/supabase';
 import { formatCOP, getLast6MonthsLabels } from '../../lib/utils';
 import type { Ingreso, Egreso } from '../../types';
 
+// Propiedades requeridas por el componente Dashboard
 interface DashboardProps {
-  userId: string;
+  userId: string; // ID del usuario autenticado
 }
 
+// Colores utilizados para los gráficos (por ejemplo, gráfico de torta/dona)
 const COLORS = ['#3b82f6', '#a371f7', '#3fb950', '#d29922'];
 
+/**
+ * Componente interno reutilizable para renderizar tarjetas de estadísticas/métricas.
+ */
 function StatCard({ label, value, color = '' }: { label: string; value: string; color?: string }) {
   return (
     <div className="stat-card">
@@ -22,6 +27,10 @@ function StatCard({ label, value, color = '' }: { label: string; value: string; 
   );
 }
 
+/**
+ * Componente personalizado para el Tooltip de los gráficos de Recharts.
+ * Muestra las cifras formateadas en Pesos Colombianos (COP).
+ */
 const CustomTooltip = ({ active, payload, label }: any) => {
   if (active && payload && payload.length) {
     return (
@@ -45,21 +54,29 @@ const CustomTooltip = ({ active, payload, label }: any) => {
 };
 
 export default function Dashboard({ userId }: DashboardProps) {
-  const [loading, setLoading] = useState(true);
-  const [monthIngresos, setMonthIngresos] = useState<Ingreso[]>([]);
-  const [monthEgresos, setMonthEgresos] = useState<Egreso[]>([]);
-  const [chartData, setChartData] = useState<any[]>([]);
+  // --- Estados del Componente ---
+  const [loading, setLoading] = useState(true); // Controla el estado de carga inicial de los datos
+  const [monthIngresos, setMonthIngresos] = useState<Ingreso[]>([]); // Ingresos del mes actual
+  const [monthEgresos, setMonthEgresos] = useState<Egreso[]>([]); // Egresos del mes actual
+  const [chartData, setChartData] = useState<any[]>([]); // Datos históricos formateados para los gráficos (últimos 6 meses)
 
+  // Carga los datos cuando el componente se monta o cuando cambia el userId
   useEffect(() => {
     loadData();
   }, [userId]);
 
+  /**
+   * Función principal para consultar Supabase y recopilar toda la información financiera.
+   */
   async function loadData() {
     setLoading(true);
+    
+    // 1. Calcular el rango de fechas para el mes actual
     const now = new Date();
-    const from = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0];
-    const to = new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString().split('T')[0];
+    const from = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0]; // Primer día del mes
+    const to = new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString().split('T')[0]; // Último día del mes
 
+    // 2. Obtener simultáneamente los ingresos y egresos del mes en curso
     const [{ data: ingresos }, { data: egresos }] = await Promise.all([
       supabase.from('ingresos').select('*').eq('user_id', userId).gte('fecha', from).lte('fecha', to),
       supabase.from('egresos').select('*').eq('user_id', userId).gte('fecha', from).lte('fecha', to),
@@ -68,45 +85,59 @@ export default function Dashboard({ userId }: DashboardProps) {
     setMonthIngresos(ingresos || []);
     setMonthEgresos(egresos || []);
 
-    // Load 6 months data
-    const labels = getLast6MonthsLabels();
+    // 3. Obtener y estructurar los datos históricos de los últimos 6 meses para los gráficos
+    const labels = getLast6MonthsLabels(); // Nombres de los meses (ej. "Ene", "Feb", etc.)
     const monthsData = [];
+    
+    // Iteramos hacia atrás desde hace 5 meses hasta el mes actual
     for (let i = 5; i >= 0; i--) {
       const d = new Date();
-      d.setDate(1);
+      d.setDate(1); // Evita problemas de desbordamiento de fin de mes
       d.setMonth(d.getMonth() - i);
+      
       const mFrom = new Date(d.getFullYear(), d.getMonth(), 1).toISOString().split('T')[0];
       const mTo = new Date(d.getFullYear(), d.getMonth() + 1, 0).toISOString().split('T')[0];
+      
+      // Consultamos ingresos (monto y total de seguridad social) y egresos para este mes específico
       const [{ data: mIng }, { data: mEgr }] = await Promise.all([
         supabase.from('ingresos').select('monto,ss_total').eq('user_id', userId).gte('fecha', mFrom).lte('fecha', mTo),
         supabase.from('egresos').select('monto').eq('user_id', userId).gte('fecha', mFrom).lte('fecha', mTo),
       ]);
+      
+      // Agregamos la información consolidada del mes al arreglo
       monthsData.push({
         mes: labels[5 - i],
         Ingresos: (mIng || []).reduce((s: number, r: any) => s + r.monto, 0),
         Egresos: (mEgr || []).reduce((s: number, r: any) => s + r.monto, 0),
       });
     }
+    
     setChartData(monthsData);
     setLoading(false);
   }
 
-  const totalIngresos = monthIngresos.reduce((s, r) => s + r.monto, 0);
-  const totalEgresos = monthEgresos.reduce((s, r) => s + r.monto, 0);
-  const totalSS = monthIngresos.reduce((s, r) => s + (r.ss_total || 0), 0);
+  // --- Cálculos y Acumuladores del Mes ---
+  const totalIngresos = monthIngresos.reduce((s, r) => s + r.monto, 0); // Suma total de ingresos
+  const totalEgresos = monthEgresos.reduce((s, r) => s + r.monto, 0); // Suma total de egresos
+  const totalSS = monthIngresos.reduce((s, r) => s + (r.ss_total || 0), 0); // Suma de lo pagado/estimado en seguridad social
+  
+  // Utilidad neta estimada = Ingresos - Egresos - Seguridad Social
   const utilidad = totalIngresos - totalEgresos - totalSS;
 
+  // Desglose detallado de Seguridad Social (SS) e Ingreso Base de Cotización (IBC)
   const ibcTotal = monthIngresos.reduce((s, r) => s + (r.ibc || 0), 0);
   const ssPension = monthIngresos.reduce((s, r) => s + (r.ss_pension || 0), 0);
   const ssSalud = monthIngresos.reduce((s, r) => s + (r.ss_salud || 0), 0);
   const ssArl = monthIngresos.reduce((s, r) => s + (r.ss_arl || 0), 0);
   const ssCaja = monthIngresos.reduce((s, r) => s + (r.ss_caja || 0), 0);
 
+  // Datos para el gráfico de dona: Distribución entre Seguridad Social y el neto restante
   const donutData = [
     { name: 'SS Total', value: totalSS },
     { name: 'Neto', value: Math.max(0, totalIngresos - totalSS) },
   ].filter(d => d.value > 0);
 
+  // Vista de pantalla de carga
   if (loading) {
     return (
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '300px', color: 'var(--color-text-muted)' }}>
@@ -115,11 +146,13 @@ export default function Dashboard({ userId }: DashboardProps) {
     );
   }
 
+  // Nombre formateado del mes actual para la cabecera (ej: "junio de 2026")
   const now = new Date();
   const monthLabel = now.toLocaleDateString('es-CO', { month: 'long', year: 'numeric' });
 
   return (
     <div>
+      {/* Cabecera del Dashboard */}
       <div className="page-header">
         <div>
           <div className="page-title">Dashboard</div>
@@ -129,17 +162,18 @@ export default function Dashboard({ userId }: DashboardProps) {
         </div>
       </div>
 
-      {/* Stats */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '12px', marginBottom: '24px' }}>
+      {/* Tarjetas de Estadísticas Principales */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px,1fr))', gap: '12px', marginBottom: '24px' }}>
         <StatCard label="Ingresos del mes" value={formatCOP(totalIngresos)} color="green" />
         <StatCard label="Egresos del mes" value={formatCOP(totalEgresos)} color="red" />
         <StatCard label="SS a pagar" value={formatCOP(totalSS)} color="blue" />
         <StatCard label="Utilidad estimada" value={formatCOP(utilidad)} color={utilidad >= 0 ? 'green' : 'red'} />
       </div>
 
-      {/* Charts */}
+      {/* Gráficos Principales (Barras y Línea) */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', marginBottom: '24px' }}>
-        {/* Bar chart */}
+        
+        {/* Gráfico de Barras: Comparativo mensual Ingresos vs Egresos de los últimos 6 meses */}
         <div className="card">
           <div style={{ fontWeight: '600', marginBottom: '16px', fontSize: '13px' }}>Ingresos vs Egresos — últimos 6 meses</div>
           <ResponsiveContainer width="100%" height={220}>
@@ -155,7 +189,7 @@ export default function Dashboard({ userId }: DashboardProps) {
           </ResponsiveContainer>
         </div>
 
-        {/* Line chart */}
+        {/* Gráfico de Línea: Evolución o tendencia histórica de Ingresos */}
         <div className="card">
           <div style={{ fontWeight: '600', marginBottom: '16px', fontSize: '13px' }}>Evolución de ingresos</div>
           <ResponsiveContainer width="100%" height={220}>
@@ -170,8 +204,10 @@ export default function Dashboard({ userId }: DashboardProps) {
         </div>
       </div>
 
+      {/* Gráfico de Distribución y Tabla de Seguridad Social */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
-        {/* Donut chart */}
+        
+        {/* Gráfico de Torta/Dona: Distribución del Ingreso Mensual (Seguridad Social vs Neto) */}
         <div className="card">
           <div style={{ fontWeight: '600', marginBottom: '16px', fontSize: '13px' }}>Distribución ingreso mensual</div>
           {totalIngresos > 0 ? (
@@ -205,7 +241,7 @@ export default function Dashboard({ userId }: DashboardProps) {
           )}
         </div>
 
-        {/* SS Summary table */}
+        {/* Tabla Detallada: Resumen de Aportes a Seguridad Social */}
         <div className="card">
           <div style={{ fontWeight: '600', marginBottom: '16px', fontSize: '13px' }}>Resumen SS del mes</div>
           <table>
@@ -237,3 +273,4 @@ export default function Dashboard({ userId }: DashboardProps) {
     </div>
   );
 }
+
