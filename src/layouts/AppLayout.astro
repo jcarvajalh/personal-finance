@@ -1,0 +1,19 @@
+---
+import '../styles/global.css';
+import AppShell from '../components/ui/AppShell';
+
+const { title = 'Arka Finance' } = Astro.props;
+---
+
+<!DOCTYPE html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>{title} · Arka Finance</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  </head>
+  <body>
+    <AppShell client:load />
+  </body>
+</html>
